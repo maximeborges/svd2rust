@@ -30,11 +30,14 @@ fn run() -> Result<()> {
     let matches = App::new("svd2rust")
         .about("Generate a Rust API from SVD files")
         .arg(
+            Arg::with_name("input_deprecated")
+                .help("(DEPRECATED) Input SVD file")
+                .short("i"),
+        )
+        .arg(
             Arg::with_name("input")
-                .help("Input SVD file")
-                .short("i")
-                .takes_value(true)
-                .value_name("FILE"),
+                .help("Input SVD files")
+                .multiple(true),
         )
         .arg(
             Arg::with_name("target")
@@ -59,29 +62,41 @@ fn run() -> Result<()> {
         .map(|s| Target::parse(s))
         .unwrap_or(Ok(Target::CortexM))?;
 
-    let xml = &mut String::new();
-    match matches.value_of("input") {
-        Some(file) => {
-            File::open(file)
-                .chain_err(|| "couldn't open the SVD file")?
-                .read_to_string(xml)
-                .chain_err(|| "couldn't read the SVD file")?;
+    let mut xmls: Vec<String> = Vec::new();
+    match matches.values_of("input") {
+        Some(files) => {
+            for file in files {
+                let xml = &mut String::new();
+                File::open(file)
+                    .chain_err(|| "couldn't open the SVD file")?
+                    .read_to_string(xml)
+                    .chain_err(|| "couldn't read the SVD file")?;
+                xmls.push(xml.to_owned());
+            }
         }
         None => {
+            // TODO: parse multiple concatenated SVDs
+            let mut xml = &mut String::new();
             let stdin = std::io::stdin();
             stdin
                 .lock()
                 .read_to_string(xml)
                 .chain_err(|| "couldn't read from stdin")?;
+            xmls.push(xml.to_owned());
         }
     }
 
-    let device = svd::parse(xml);
+    let mut devices : Vec<svd::Device> = Vec::new();
+    for xml in xmls {
+        let device = svd::parse(xml.as_ref());
+        devices.push(device.to_owned());
+    }
+
 
     let nightly = matches.is_present("nightly_features");
 
     let mut device_x = String::new();
-    let items = generate::device::render(&device, target, nightly, &mut device_x)?;
+    let items = generate::device::render(&devices.first().unwrap(), target, nightly, &mut device_x)?;
 
     writeln!(File::create("lib.rs").unwrap(), "{}", quote!(#(#items)*)).unwrap();
 
